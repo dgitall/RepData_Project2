@@ -1,0 +1,403 @@
+---
+title: "Storm Events Causing Most Health and Economic Harm"
+author: "Darrell Gerber"
+date: "3/9/2021"
+output:
+  html_document: default
+subtitle: 'Reproducible Research: Project 2'
+---
+
+
+## Synopsis 
+
+This report investigates the impact of storm events in the U.S. regarding community health and economic impact. The analysis uses storm data from the National Oceanic and Atmospheric Administration (NOAA) spanning 1966 to 2011. The injuries and fatalities from storm events are used to evaluate the impact on community health. In contrast, the sum of property damage and crop damage are used to assess economic impact. Tornadoes have the highest cumulative fatalities and injuries. Floods, however, have caused the most cumulative damage. 
+
+
+## Data Processing 
+
+    
+### Load R Packages
+``` {r package, message=FALSE, warning=FALSE, results=FALSE}
+library(data.table)
+library(R.utils)
+library(stringr)
+library(knitr)
+library(ggplot2)
+
+```
+
+### Download the file and load
+Download the file from the course online storage and unzip it. Load the raw comma-separated data and convert it to data.table format for more efficient operations.  
+
+```{r loadfile, cache=TRUE}
+destFolder = "./data"
+if(!file.exists(destFolder)) {dir.create(destFolder)}
+fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+destFile = "./data/repdata%2Fdata%2FStormData.csv.bz2"
+if(!file.exists(destFile)) {
+  download.file(fileUrl, destfile = destFile, method = "curl")
+}
+dataFile <-   bunzip2(filename=destFile,skip = TRUE, remove=FALSE)
+
+rawData <- data.table(read.csv(dataFile, header = TRUE))
+```
+
+### Data Cleaning
+The original data set requires significant data cleaning. In summary:  
+1. Remove unused variables from the data set to increase the efficiency. We only need EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, and CROPDMGEXP for the remainder of the analysis.  
+2. The storm event code variable (EVTYPE) contains significantly more event-codes than mentioned in the supporting documentation ([NWSI 10-1605 AUGUST 17, 2007](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)). The data file contains many alternate wordings and misspellings, and a significant portion of the code below condenses these into a manageable few. The new event-codes are stored in NEW_EVTYPE to allow for verification.  
+3. The property damage and crop damage values are split between two variables in the data set. The first is the base value, and the second is a multiplier of the base value by order of magnitude. Combine these into a single value, each for crops and property.
+ 
+
+#### Initial cleanup
+
+Create a new data set containing only the variables we need for the forthcoming analysis.  
+``` {r reducedata}
+Data <- data.table()
+Data$EVTYPE <- rawData$EVTYPE
+Data$FATALITIES <- rawData$FATALITIES
+Data$INJURIES <- rawData$INJURIES
+Data$PROPDMG <- rawData$PROPDMG
+Data$PROPDMGEXP <- rawData$PROPDMGEXP
+Data$CROPDMG <- rawData$CROPDMG
+Data$CROPDMGEXP <- rawData$CROPDMGEXP
+```
+
+#### EVTYPE cleanup
+Next, clean up the EVTYPE variable. The dataset begins with   `r uniqueN(Data$EVTYPE)` unique event types. We aim for a much more manageable and useful set of event codes by eliminating duplicate event types. Put this into a new variable to allow for validation.  
+
+Convert all of the events to upper case and set anything that isn’t a storm event to NA.  
+
+```{r nonevents, cache=FALSE}
+Data$NEW_EVTYPE <- toupper(Data$EVTYPE)
+
+Data[grepl("SUMMARY", NEW_EVTYPE), NEW_EVTYPE:= NA]
+Data[grepl("NORMAL", NEW_EVTYPE), NEW_EVTYPE:= NA]
+Data[grepl("MONTHLY", NEW_EVTYPE), NEW_EVTYPE:= NA]
+Data[grepl("NO SEVERE", NEW_EVTYPE), NEW_EVTYPE:= NA]
+Data[grepl("NONE", NEW_EVTYPE), NEW_EVTYPE:= NA]
+Data[grepl("NORTHERN LIGHTS", NEW_EVTYPE), NEW_EVTYPE:= NA]
+```
+
+Merge the variations for winter weather and winter storms into the WINTER WEATHER category. This merges the WINTER WEATHER, WINTER STORM, and BLIZZARD categories, as well as gathering misspellings.  
+
+```{r winterweather, cache=FALSE}
+Data[grepl("WINTER WEATHER", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+Data[grepl("WINTERY", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+Data[grepl("WINTRY", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+Data[grepl("WINTER STORM", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+Data[grepl("WINTER MIX", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+Data[grepl("BLIZZARD", NEW_EVTYPE), NEW_EVTYPE:= "WINTER WEATHER"]
+
+```
+
+Convert entries containing ‘fire’ to WILDFIRE. Also, fix the misspellings of WATERSPOUT and collect them into one code.  
+
+```{r firewater, cache=FALSE}
+Data[grepl("FIRE", NEW_EVTYPE), NEW_EVTYPE:= "WILDFIRE"]
+
+Data[grepl("WATERSPOUT", NEW_EVTYPE), NEW_EVTYPE:= "WATERSPOUT"]
+Data[grepl("WATER SPOUT", NEW_EVTYPE), NEW_EVTYPE:= "WATERSPOUT"]
+Data[grepl("WAYTERSPOUT", NEW_EVTYPE), NEW_EVTYPE:= "WATERSPOUT"]
+```
+  
+Combine the tropical storms into one event type and the hurricanes and typhoons into another. Also, condense all of the volcanic activity into one.  
+
+``` {r tropical, cache=FALSE}
+
+Data[grepl("VOLCAN", NEW_EVTYPE), NEW_EVTYPE:= "VOLCANIC ASH"]
+
+Data[grepl("TROPICAL STORM", NEW_EVTYPE), NEW_EVTYPE:= "TROPICAL STORM"]
+
+Data[grepl("HURRICANE", NEW_EVTYPE), NEW_EVTYPE:= "HURRICANE/TYPHOON"]
+Data[grepl("TYPHOON", NEW_EVTYPE), NEW_EVTYPE:= "HURRICANE/TYPHOON"]
+Data[grepl("REMNANTS OF FLOYD", NEW_EVTYPE), NEW_EVTYPE:= "HURRICANE/TYPHOON"]
+```
+
+Fix all of the misspellings of 'tornado' and combine.  
+
+```{r tornado, cache=FALSE}
+Data[grepl("TORNADO", NEW_EVTYPE), NEW_EVTYPE:= "TORNADO"]
+Data[grepl("TORNADOE", NEW_EVTYPE), NEW_EVTYPE:= "TORNADO"]
+Data[grepl("TORNDAO", NEW_EVTYPE), NEW_EVTYPE:= "TORNADO"]
+```
+
+Fix misspellings and combine the expressions of low-temperature events into one category.  
+
+```{r cold, cache=FALSE}
+Data[grepl("WIND CH", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("WINDCHILL", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("COLD", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("COOL", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("HYPOTHERMIA", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("HYPERTHERMIA", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+Data[grepl("LOW TEMPERATURE", NEW_EVTYPE), NEW_EVTYPE:= "EXTREME COLD/WIND CHILL"]
+```
+
+Combine the various versions of funnel clouds.  
+
+``` {r funnelcloud, cache=FALSE}
+Data[grepl("FUNNEL", NEW_EVTYPE), NEW_EVTYPE:= "FUNNEL CLOUD"]
+```
+  
+Combine references to surf events and rip currents. Combine several events that appear to refer to storm surges or high tide damages.  
+
+``` {r surftide, cache=FALSE}
+Data[grepl("SURF", NEW_EVTYPE), NEW_EVTYPE:= "HIGH SURF"]
+Data[grepl("RIP CURRENT", NEW_EVTYPE), NEW_EVTYPE:= "RIP CURRENT"]
+
+Data[grepl("SURGE", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("SWELL", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("WAVE", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("SEA", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("BLOW-OUT TIDE", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("HIGH TIDE", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("COASTAL STORM", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+Data[grepl("COASTALSTORM", NEW_EVTYPE), NEW_EVTYPE:= "STORM SURGE/TIDE"]
+```
+
+Combine references to frost and freeze events.  
+
+``` {r frostfreeze, cache=FALSE}
+Data[grepl("FROST", NEW_EVTYPE), NEW_EVTYPE:= "FROST/FREEZE"]
+Data[grepl("FREEZE", NEW_EVTYPE), NEW_EVTYPE:= "FROST/FREEZE"]
+```
+DEBRIS FLOW is the new classification for landslides.  ([NWSI 10-1605 AUGUST 17, 2007](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)). Collect the types of events that can be called a debris flow. Also, collect the various misspellings of AVALANCHE.  
+```{r debrisflow, cache=FALSE}
+Data[grepl("LANDSL", NEW_EVTYPE), NEW_EVTYPE:= "DEBRIS FLOW"]
+Data[grepl("DAM BREAK", NEW_EVTYPE), NEW_EVTYPE:= "DEBRIS FLOW"]
+Data[grepl("DAM FAILURE", NEW_EVTYPE), NEW_EVTYPE:= "DEBRIS FLOW"]
+Data[grepl("MUD", NEW_EVTYPE), NEW_EVTYPE:= "DEBRIS FLOW"]
+Data[grepl("ROCK", NEW_EVTYPE), NEW_EVTYPE:= "DEBRIS FLOW"]
+
+Data[grepl("AVAL", NEW_EVTYPE), NEW_EVTYPE:= "AVALANCHE"]
+```
+   
+Condense variations of low rainfall and drought.  
+```{r drought, cache=FALSE}
+
+Data[grepl("DRY", NEW_EVTYPE), NEW_EVTYPE:= "DROUGHT"]
+Data[grepl("DROUGHT", NEW_EVTYPE), NEW_EVTYPE:= "DROUGHT"]
+Data[grepl("BELOW NORMAL PRECIPITATION", NEW_EVTYPE), NEW_EVTYPE:= "DROUGHT"]
+Data[grepl("RECORD LOW RAINFALL", NEW_EVTYPE), NEW_EVTYPE:= "DROUGHT"]
+Data[grepl("DRIEST MONTH", NEW_EVTYPE), NEW_EVTYPE:= "DROUGHT"]
+```
+
+Combine the misspellings of lightning.  
+```{r lightning, cache=FALSE}
+Data[grepl("LIGHTNING", NEW_EVTYPE), NEW_EVTYPE:= "LIGHTNING"]
+Data[grepl("LIGHTING", NEW_EVTYPE), NEW_EVTYPE:= "LIGHTNING"]
+Data[grepl("LIGNTNING", NEW_EVTYPE), NEW_EVTYPE:= "LIGHTNING"]
+```
+  
+Combine misspellings of FOG. Also, merge all of the variations for freezing rain or ice into ICE STORM.    
+```{r icestorm, cache=FALSE}
+Data[grepl("DENSE FOG", NEW_EVTYPE), NEW_EVTYPE:= "FOG"]
+Data[grepl("VOG", NEW_EVTYPE), NEW_EVTYPE:= "FOG"]
+
+Data[grepl("ICE", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+Data[grepl("ICY", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+Data[grepl("GLAZE", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+Data[grepl("FREEZING RAIN", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+Data[grepl("FREEZING DRIZZLE", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+Data[grepl("FREEZING SPRAY", NEW_EVTYPE), NEW_EVTYPE:= "ICE STORM"]
+```
+  
+Combine variations of lake-effect snow. Then take every other version of snow events and combine it into HEAVY SNOW. Also, combine all types of Hail events. Note, this order gives precedence to snow when it is a combined snow/hail event. Mixed rain, hail, and/or snow events appear as snow or hail since parsing for rain occurs further down.  
+
+```{r snow, cache=FALSE}
+Data[grepl("LAKE EFFECT", NEW_EVTYPE), NEW_EVTYPE:= "LAKE-EFFECT"]
+Data[grepl("LAKE-EFFECT", NEW_EVTYPE), NEW_EVTYPE:= "LAKE-EFFECT"]
+Data[grepl("LAKE SNOW", NEW_EVTYPE), NEW_EVTYPE:= "LAKE-EFFECT"]
+
+Data[grepl("SNOW", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY SNOW"]
+Data[grepl("HAIL", NEW_EVTYPE), NEW_EVTYPE:= "HAIL"]
+```
+
+Combine references to high temperatures into EXCESSIVE HEAT.  
+```{r heat, cache=FALSE}
+Data[grepl("HEAT", NEW_EVTYPE), NEW_EVTYPE:= "EXCESSIVE HEAT"]
+Data[grepl("HOT", NEW_EVTYPE), NEW_EVTYPE:= "EXCESSIVE HEAT"]
+Data[grepl("WARM", NEW_EVTYPE), NEW_EVTYPE:= "EXCESSIVE HEAT"]
+Data[grepl("HIGH TEMP", NEW_EVTYPE), NEW_EVTYPE:= "EXCESSIVE HEAT"]
+Data[grepl("RECORD TEMP", NEW_EVTYPE), NEW_EVTYPE:= "EXCESSIVE HEAT"]
+```
+
+Merge remaining references to rain or precipitation into HEAVY RAIN events. Take care of SLEET events here, too.  
+
+```{r rain, cache=FALSE}
+Data[grepl("RAIN", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("HEAVY SHOWER", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("HEAVY PRECIP", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("MIXED PRECIP", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("HEAVY MIX", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("BURST", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("LANDSPOUT", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("RECORD PRECIPITATION", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("EXCESSIVE PRECIPITATION", NEW_EVTYPE), NEW_EVTYPE:= "HEAVY RAIN"]
+Data[grepl("SLEET", NEW_EVTYPE), NEW_EVTYPE:= "SLEET"]
+```
+
+Combine misspellings or representations of thunderstorms into one THUNDERSTORM category. Combine remaining references to wind into a single category. Note, hail or rain damage from a thunderstorm was already categorized as HAIL or HEAVY RAIN events above.  
+
+```{r thunderstormwind, cache=FALSE}
+Data[grepl("THUNDERSTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("TSTM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("TUNDERSTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNERSTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDERTSORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDERTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDESTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDERSTORMW", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDERESTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUNDEERSTORM", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("THUDERSTORM WIND", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("WALL CLOUD", NEW_EVTYPE), NEW_EVTYPE:= "THUNDERSTORM"]
+Data[grepl("WIND", NEW_EVTYPE), NEW_EVTYPE:= "STRONG WIND"]
+Data[grepl("GUST", NEW_EVTYPE), NEW_EVTYPE:= "STRONG WIND"]
+Data[grepl("WND", NEW_EVTYPE), NEW_EVTYPE:= "STRONG WIND"]
+Data[grepl("SEVERE TURBULENCE", NEW_EVTYPE), NEW_EVTYPE:= "STRONG WIND"]
+```
+  
+Combine flooding variations into one category, including coastal flooding, lakeshore flooding, and references to erosion or streamflow. Note, too, that all of the remaining urban and metro storm events are assumed to be floods for further analysis.  
+
+```{r flood, cache=FALSE}
+Data[grepl("FLOO", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("WET", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("EROS", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("HIGH WATER", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("FLD", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("STREAM", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("URBAN", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("RAPIDLY RISING WATER", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+Data[grepl("METRO STORM", NEW_EVTYPE), NEW_EVTYPE:= "FLOOD"]
+```
+  
+Combine dust events into dust storms and references to smoke into DENSE SMOKE.  
+
+```{r dustsmoke, cache=FALSE}
+Data[grepl("DUST", NEW_EVTYPE), NEW_EVTYPE:= "DUST STORM"]
+Data[grepl("SMOKE", NEW_EVTYPE), NEW_EVTYPE:= "DENSE SMOKE"]
+```
+
+Assign events that do not fit a category or are missing info to OTHER.  
+
+```{r other, cache=FALSE}
+Data[grepl("\\?", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("APACHE COUNTY", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("HIGH", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("MARINE ACCIDENT", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("MARINE MISHAP", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("MILD PATTERN", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("SOUTHEAST", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("TEMPERATURE RECORD", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("DROWNING", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("TEMPERATURE RECORD", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("RED FLAG CRITERIA", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("RECORD LOW", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+Data[grepl("EXCESSIVE$", NEW_EVTYPE), NEW_EVTYPE:= "OTHER"]
+```
+
+
+```{r}
+kable(table(Data$NEW_EVTYPE), align=c('c', 'c'),
+      caption="Remaining Storm Event Codes",
+      format.args = list(width = "5", big.mark = ","))
+```
+#### PROPDMG and CROPDMG cleanup
+The supporting documentation ([NWSI 10-1605 AUGUST 17, 2007](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)) describes the combination of damage estimates and damage estimate exponents as:   
+
+"Estimates should be rounded to three significant digits, followed by an alphabetical character signifying the magnitude of the number, i.e., 1.55B for $1,550,000,000. Alphabetical characters used to signify magnitude include “K” for thousands, “M” for millions, and “B” for billions."  
+
+Unfortunately, looking at PROPDMGEXP and CROPDMGEXT, there are several unexpected values in the data.  
+```{r results='asis'}
+kable(table(Data$PROPDMGEXP), align=c('c', 'c'),
+      caption="Property Damage Exponent Values",
+      format.args = list(width = "5", big.mark = ","))
+```
+```{r, results='asis'}
+kable(table(Data$CROPDMGEXP), align=c('c', 'c'),
+      caption="Crop Damage Exponent Values",
+      format.args = list(width = "5", big.mark = ","))
+```
+
+Fortunately, a previous student inferred the mysterious marks' meaning by looking back at the original event records. ([How To Handle Exponent Value of PROPDMGEXP and CROPDMGEXP](https://rstudio-pubs-static.s3.amazonaws.com/58957_37b6723ee52b455990e149edde45e5b6.html)).  
+
+In summary, they found that outside of the multiplier coding above, numeric values (0-9) indicate a multiplier of ‘10’. We can ignore other characters in the exponent column for our analysis.   
+
+```{r damagecleanup}
+Data$PROPERTY_DMG <- Data$PROPDMG
+setDT(Data)[PROPDMGEXP %in% c('B','b'), PROPERTY_DMG:= PROPERTY_DMG*10^9]
+setDT(Data)[PROPDMGEXP %in% c('M','m'), PROPERTY_DMG:= PROPERTY_DMG*10^6]
+setDT(Data)[PROPDMGEXP %in% c('K','k'), PROPERTY_DMG:= PROPERTY_DMG*10^3]
+setDT(Data)[PROPDMGEXP %in% c('H','h'), PROPERTY_DMG:= PROPERTY_DMG*10^2]
+setDT(Data)[PROPDMGEXP %in% c('0','1','2','3','4','5','6','7','8','9'),
+            PROPERTY_DMG:= PROPERTY_DMG*10]
+
+Data$CROP_DMG <- Data$CROPDMG
+setDT(Data)[CROPDMGEXP %in% c('B','b'), CROP_DMG:= CROP_DMG*10^9]
+setDT(Data)[CROPDMGEXP %in% c('M','m'), CROP_DMG:= CROP_DMG*10^6]
+setDT(Data)[CROPDMGEXP %in% c('K','k'), CROP_DMG:= CROP_DMG*10^3]
+setDT(Data)[CROPDMGEXP %in% c('H','h'), CROP_DMG:= CROP_DMG*10^2]
+setDT(Data)[CROPDMGEXP %in% c('0','1','2','3','4','5','6','7','8','9'),
+            CROP_DMG:= CROP_DMG*10]
+```
+
+## Results 
+### 1. Across the United States, which types of events (as indicated in the EVTYPE\color{red}{\verb|EVTYPE|}EVTYPE variable) are most harmful with respect to population health?  
+
+To determine harm to community health from different storm events, sum the fatalities and injuries from each storm type. Collected the cumulative damages by storm event in a separate dataset and plot the top four storm events.  
+
+```{r health}
+fatal <- Data[,list(TOTAL = sum(FATALITIES, na.rm = T)), by='NEW_EVTYPE']
+fatal <- fatal[order(-TOTAL)]
+fatal$Graph <- "FATALITIES"
+injury <- Data[,list(TOTAL = sum(INJURIES, na.rm = T)), by='NEW_EVTYPE']
+injury$Graph <- "INJURIES"
+injury <- injury[order(-TOTAL)]
+pubHealth <- rbind(injury[1:4,], fatal[1:4,])
+
+```
+```{r healthplot1}
+g <- ggplot(pubHealth, aes(x=factor(NEW_EVTYPE), y=TOTAL) ) + 
+  geom_bar(stat="identity", fill="steelblue") + 
+  # scale_x_discrete(limits=pubHealth$NEW_EVTYPE) +
+  facet_grid(.~Graph, scales = "free") +
+  labs(title = "Fatalities and Injuries from U.S. Storm Events (1966-2011)",
+       x="Storm Events", y="Count of Fatalities/Injuries") +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+
+print(g)
+```
+  
+Tornadoes have caused both the most cumulative injuries (`r format(injury[1,TOTAL], scientific=FALSE, big.mark=",")`)  and the most cumulative fatalities (`r format(fatal[1,TOTAL], scientific=FALSE, big.mark=",")`) in the U.S. between 1966 and 2011. 
+  
+### 2. Across the United States, which types of events have the greatest economic consequences?  
+
+To determine the damages from different storm events, sum the property damage and crop damage from each storm type. We will collect this in a separate dataset and add the two to get the total cumulative damage from each kind of storm. Plot the four storm events with the largest total cumulative damage.  
+
+```{r damage}
+PropDmg <- Data[,list(PROPERTY_DMG = sum(PROPERTY_DMG, na.rm = T)), by='NEW_EVTYPE']
+CropDmg <- Data[,list(CROP_DMG = sum(CROP_DMG, na.rm = T)), by='NEW_EVTYPE']
+Damage <- merge(PropDmg, CropDmg, by='NEW_EVTYPE')
+Damage$TOTAL_DMG <- Damage$CROP_DMG + Damage$PROPERTY_DMG
+Damage <- Damage[order(-TOTAL_DMG)]
+
+```
+
+
+```{r damageplot1}
+g <- ggplot(Damage[1:4,], aes(x=NEW_EVTYPE, y=TOTAL_DMG/10^9) ) + 
+  geom_bar(stat="identity", fill="steelblue") + 
+  scale_x_discrete(limits=Damage[1:4]$NEW_EVTYPE) +
+  labs(title = "Total Damage from U.S. Storm Events (1966-2011)",
+       x="Storm Events", y="Total Damage (Billion Dollars)")
+print(g)
+```
+  
+Flooding has overwhelmingly caused the most cumulative economic harm via property and crop damage (total of about $`r format(Damage[1,TOTAL_DMG],scientific=TRUE,digits=3, nsmall=2)`) from 1966 to 2011.     
+
+
+
+
+ 
